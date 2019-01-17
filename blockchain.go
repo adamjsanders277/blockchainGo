@@ -1,8 +1,19 @@
+//Following tutorial to learn a bit of Go and blockchain for a project
+
 package main
 
-import {
+import (
 	"fmt"
-}
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"time"
+	"github.com/gorilla/mux"
+	"io"
+	"log"
+	"net/http"
+	"crypto/md5"
+)
 
 type Block struct {
 	Pos				int
@@ -13,18 +24,18 @@ type Block struct {
 }
 
 type BookCheckout struct {
-	BookID			string 	'json:"book_id"'
-	User			string 	'json:"user"'
-	CheckoutDate	string 	'json:"checkout_date"'
-	IsGenesis		bool	'json:"is_genesis"'
+	BookID			string 	`json:"book_id"`
+	User			string 	`json:"user"`
+	CheckoutDate	string 	`json:"checkout_date"`
+	IsGenesis		bool	`json:"is_genesis"`
 }
 
 type Book struct {
-	ID 				string	'json:"id"'
-	Title			string	'json:"title"'
-	Author			string	'json:"author"'
-	PublishDate		string	'json:"publish_date"'
-	ISBN			string	'json:"isbn"'
+	ID 				string	`json:"id"`
+	Title			string	`json:"title"`
+	Author			string	`json:"author"`
+	PublishDate		string	`json:"publish_date"`
+	ISBN			string	`json:"isbn"`
 }
 
 // Blockchain is an ordered list of blocks
@@ -44,7 +55,7 @@ func (bc *Blockchain) AddBlock (data BookCheckout) {
 }
 
 func GenesisBlock() *Block {
-	return CreateBlock(&Block, BookCheckout(IsGenesis: true))
+	return CreateBlock(&Block{}, BookCheckout{IsGenesis: true})
 }
 
 func NewBlockchain() *Blockchain {
@@ -91,8 +102,78 @@ func CreateBlock(prevBlock *Block, checkoutItem BookCheckout) *Block {
 	return block
 }
 
+
+func getBlockchain(w http.ResponseWriter, r *http.Request) {
+	jbytes, err := json.MarshalIndent(BlockChain.blocks, "", " ")
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(err)
+		return
+	}
+	io.WriteString(w, string(jbytes))
+}
+
+func writeBlock(w http.ResponseWriter, r *http.Request) {
+	var checkoutItem BookCheckout
+	if err := json.NewDecoder(r.Body).Decode(&checkoutItem); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		log.Printf("Could not write block: %v", err)
+		w.Write([]byte("Could not write block"))
+		return
+	}
+	BlockChain.AddBlock(checkoutItem)
+	resp, err := json.MarshalIndent(checkoutItem, "", " ")
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		log.Printf("Could not marshal payload: %v", err)
+		w.Write([]byte("Could not write block"))
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	w.Write(resp)
+}
+
+func newBook(w http.ResponseWriter, r *http.Request) {
+	var book Book
+	if err := json.NewDecoder(r.Body).Decode(&book); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		log.Printf("Could not create: %v", err)
+		w.Write([]byte("Could not create new book"))
+	}
+	h := md5.New()
+	io.WriteString(h, book.ISBN+book.PublishDate)
+	book.ID = fmt.Sprintf("%x", h.Sum(nil))
+
+	resp, err := json.MarshalIndent(book, "", " ")
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		log.Printf("Could not marshal payload: %v", err)
+		w.Write([]byte("Could not save book data"))
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	w.Write(resp)
+}
+
 func main() {
 	BlockChain = NewBlockchain()
 
-	fmt.Println("HELLO")
+	r := mux.NewRouter()
+	r.HandleFunc("/", getBlockchain).Methods("GET")
+	r.HandleFunc("/", writeBlock).Methods("POST")
+	r.HandleFunc("/new", newBook).Methods("POST")
+
+	go func() {
+		for _, block := range BlockChain.blocks {
+			fmt.Printf("Prev. hash: %x\n", block.PrevHash)
+			bytes, _ := json.MarshalIndent(block.Data, "", " ")
+			fmt.Printf("Data: %v\n", string(bytes))
+			fmt.Printf("Hash: %x\n", block.Hash)
+			fmt.Println()
+		}
+	}()
+
+	log.Println("Listening on port 3000")
+
+	log.Fatal(http.ListenAndServe(":3000", r))
 }
